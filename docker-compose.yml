@@ -1,0 +1,65 @@
+name: navidrome
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "10"
+
+services:
+  navidrome:
+    image: deluan/navidrome:latest
+    container_name: navidrome
+    restart: always
+    environment:
+      TZ: ${TZ:-Europe/Athens}
+      ND_MUSICFOLDER: /music/default
+    volumes:
+      - data:/data
+      - music:/music:ro
+    networks:
+      - navidrome
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:4533/ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          # noinspection ComposeUnknownValues
+          cpus: "${NAVIDROME_CPU_LIMIT:-2}"
+          # noinspection ComposeUnknownValues
+          memory: "${NAVIDROME_MEMORY_LIMIT:-128M}"
+        reservations:
+          # noinspection ComposeUnknownValues
+          cpus: "${NAVIDROME_CPU_RESERVATION:-0.5}"
+          # noinspection ComposeUnknownValues
+          memory: "${NAVIDROME_MEMORY_RESERVATION:-32M}"
+    labels:
+      - "traefik.enable=true"
+      # Router
+      - "traefik.http.routers.navidrome.rule=Host(`${DOMAIN:?DOMAIN is required}`)"
+      - "traefik.http.routers.navidrome.entrypoints=websecure"
+      - "traefik.http.routers.navidrome.service=navidrome"
+      - "traefik.http.routers.navidrome.middlewares=navidrome-ipallowlist"
+      - "traefik.http.routers.navidrome.tls.certresolver=cloudflare"
+      # Middlewares
+      - "traefik.http.middlewares.navidrome-ipallowlist.ipallowlist.sourcerange=${IPV4_ALLOWLIST:-127.0.0.1/32},${IPV6_ALLOWLIST:-::/0}"
+      # Service
+      - "traefik.http.services.navidrome.loadbalancer.server.port=4533"
+
+networks:
+  navidrome:
+    name: navidrome
+
+volumes:
+  data:
+  music:
+    driver: local
+    driver_opts:
+      type: "${MUSIC_MOUNT_TYPE:?MUSIC_MOUNT_TYPE is required}"
+      o: "${MUSIC_MOUNT_O:?MUSIC_MOUNT_O is required}"
+      device: "${MUSIC_MOUNT_DEVICE:?MUSIC_MOUNT_DEVICE is required}"
