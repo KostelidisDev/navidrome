@@ -4,16 +4,32 @@ x-logging: &default-logging
   driver: json-file
   options:
     max-size: "10m"
-    max-file: "10"
+    max-file: "5"
+    compress: "true"
 
 services:
   navidrome:
-    image: gitea.kostelidis.dev/kostelidisdev/navidrome/navidrome:latest
+    # Pin an immutable tag (version or sha-…) from your Gitea registry, not "latest".
+    image: gitea.kostelidis.dev/kostelidisdev/navidrome:${IMAGE_TAG:-1.0.0}
     container_name: navidrome
-    restart: always
+    restart: unless-stopped
+    stop_grace_period: 30s
+    # Navidrome only writes to /data (database, cache); everything else stays
+    # read-only. If startup fails with "read-only file system" or "permission
+    # denied", `docker logs navidrome` names the path or permission it needs.
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     environment:
-      TZ: ${TZ:-Europe/Athens}
+      TZ: "${TZ:-Europe/Athens}"
       ND_MUSICFOLDER: /music/default
+      # Network shares don't deliver file-change events, so new music on the
+      # share is only found by a scheduled scan.
+      ND_SCANNER_SCHEDULE: "${ND_SCANNER_SCHEDULE:-@every 1h}"
     volumes:
       - data:/data
       - music:/music:ro
@@ -25,29 +41,32 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
+      start_interval: 5s
     logging: *default-logging
     deploy:
       resources:
         limits:
+          # Each transcoded stream runs its own ffmpeg process, and library scans
+          # of large collections need headroom — 128M is too tight for either.
           # noinspection ComposeUnknownValues
           cpus: "${NAVIDROME_CPU_LIMIT:-2}"
           # noinspection ComposeUnknownValues
-          memory: "${NAVIDROME_MEMORY_LIMIT:-128M}"
+          memory: "${NAVIDROME_MEMORY_LIMIT:-512M}"
+          # noinspection ComposeUnknownValues
+          pids: ${NAVIDROME_PIDS_LIMIT:-256}
         reservations:
           # noinspection ComposeUnknownValues
-          cpus: "${NAVIDROME_CPU_RESERVATION:-0.5}"
-          # noinspection ComposeUnknownValues
-          memory: "${NAVIDROME_MEMORY_RESERVATION:-32M}"
+          memory: "${NAVIDROME_MEMORY_RESERVATION:-64M}"
     labels:
       - "traefik.enable=true"
-      # Router
+      # Router (TLS comes from the websecure entrypoint's wildcard default)
       - "traefik.http.routers.navidrome.rule=Host(`${DOMAIN:?DOMAIN is required}`)"
       - "traefik.http.routers.navidrome.entrypoints=websecure"
       - "traefik.http.routers.navidrome.service=navidrome"
-      - "traefik.http.routers.navidrome.middlewares=navidrome-ipallowlist"
-      - "traefik.http.routers.navidrome.tls.certresolver=cloudflare"
-      # Middlewares
-      - "traefik.http.middlewares.navidrome-ipallowlist.ipallowlist.sourcerange=${IPV4_ALLOWLIST:-127.0.0.1/32},${IPV6_ALLOWLIST:-::/0}"
+      - "traefik.http.routers.navidrome.middlewares=navidrome-ipallowlist,strict-path@file"
+      # Middlewares — defaults lock out everyone on both IPv4 and IPv6 until you
+      # set the allowlists.
+      - "traefik.http.middlewares.navidrome-ipallowlist.ipallowlist.sourcerange=${IPV4_ALLOWLIST:-127.0.0.1/32},${IPV6_ALLOWLIST:-::1/128}"
       # Service
       - "traefik.http.services.navidrome.loadbalancer.server.port=4533"
 
@@ -57,7 +76,9 @@ networks:
 
 volumes:
   data:
+    name: navidrome-data
   music:
+    name: navidrome-music
     driver: local
     driver_opts:
       type: "${MUSIC_MOUNT_TYPE:?MUSIC_MOUNT_TYPE is required}"
