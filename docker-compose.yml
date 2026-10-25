@@ -9,8 +9,7 @@ x-logging: &default-logging
 
 services:
   navidrome:
-    # Pin an immutable tag (version or sha-…) from your Gitea registry, not "latest".
-    image: gitea.kostelidis.dev/kostelidisdev/navidrome:${IMAGE_TAG:-1.0.0}
+    image: ghcr.io/navidrome/navidrome:0.64.2
     container_name: navidrome
     restart: unless-stopped
     stop_grace_period: 30s
